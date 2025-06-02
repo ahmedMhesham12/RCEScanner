@@ -1,64 +1,108 @@
-#!/usr/bin/python
+#!/usr/bin/env python3
+"""
+Author     : Mohammad Askar | @mohammadaskar2
+Updated by : Ahmed | @ahmedMhesham12
 
-'''
-author : Mohammad Askar | @mohammadaskar2
+Description:
+    Scan PHP files for potential Remote Code Execution (RCE) vulnerabilities
+    by detecting usage of dangerous PHP functions.
 
-Description : This script will help you to find unsafe functions on any
-php script and give you information about it
-
-Requiremnets : termcolor, tabulate
-'''
+Requirements:
+    pip install termcolor tabulate
+"""
 
 import os
 import sys
-import time
 import re
+import argparse
 from termcolor import cprint
 from tabulate import tabulate
 
-if len(sys.argv) != 3:
-    cprint("[+] Usage : ./{0} path extension".format(sys.argv[0]), "red")
-    cprint("[+] Example : ./{0} /var/www/plugin php".format(sys.argv[0]), "red")
-    sys.exit(0)
-
-path = sys.argv[1]
-extension = sys.argv[2]
-final_files = []
-reg = '''\((.*)\);'''
-unsafe = ["system", "shell_exec", "exec", "passthru", "eval"]
-
-
-def spider(script_path):
-    if os.path.exists(path) is False:
-        cprint("[-]Directory not exist", "red")
-        sys.exit(0)
-    cprint("[+] Scanning started for the script ..", "green")
-    for root, dirs, files in os.walk(script_path, topdown=False):
-            for fi in files:
-                dfile = os.path.join(root, fi)
-                if dfile.endswith(".php"):
-                    final_files.append(dfile)
-    cprint("[+] {0} php files found".format(len(final_files)), "green")
+# Dangerous PHP functions that can lead to RCE
+RCE_FUNCTIONS = [
+    "eval",
+    "assert",
+    "create_function",
+    "preg_replace",  # only dangerous if /e modifier is used
+    "system",
+    "exec",
+    "passthru",
+    "shell_exec",
+    "popen",
+    "proc_open",
+    "call_user_func",
+    "call_user_func_array",
+    "unserialize"
+]
 
 
-def scanner(files_list):
+def parse_arguments():
+    parser = argparse.ArgumentParser(description="PHP RCE Scanner")
+    parser.add_argument("path", help="Directory path to scan")
+    parser.add_argument("extension", help="File extension to filter (e.g. php)")
+    return parser.parse_args()
+
+
+def find_php_files(path, extension):
+    if not os.path.isdir(path):
+        cprint("[-] Error: Provided path does not exist or is not a directory.", "red")
+        sys.exit(1)
+
+    cprint("[+] Scanning for PHP files...", "green")
+
+    php_files = []
+    for root, _, files in os.walk(path):
+        for file in files:
+            if file.endswith(f".{extension}"):
+                full_path = os.path.join(root, file)
+                php_files.append(full_path)
+
+    cprint(f"[+] Found {len(php_files)} '.{extension}' files.", "green")
+    return php_files
+
+
+def scan_file_for_rce(file_path):
     results = []
-    for fi in files_list:
-        f = open(fi, "r")
-        data = f.readlines()
-        for line in data:
-            linen = data.index(line) + 1
-            for unsafe_function in unsafe:
-                line_no = line.strip("\n")
-                final_reg = unsafe_function + reg
-                if bool(re.search(final_reg, line_no)):
-                    file_result = [fi, unsafe_function, linen]
-                    results.append(file_result)
-    print tabulate(results,
-     headers=['File Name', 'Function Name', "Line Number"],
-     tablefmt='psql', numalign="center", stralign="center")
+
+    try:
+        with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
+            lines = f.readlines()
+
+        for idx, line in enumerate(lines, 1):
+            for func in RCE_FUNCTIONS:
+                if func == "preg_replace":
+                    # Check if /e modifier is used
+                    if re.search(r'preg_replace\s*\(.*?[\'"].*?/e[\'"]', line):
+                        results.append([file_path, "preg_replace /e", idx])
+                else:
+                    pattern = rf'{func}\s*\((.*?)\)'
+                    if re.search(pattern, line):
+                        results.append([file_path, func, idx])
+    except Exception as e:
+        cprint(f"[!] Error reading file {file_path}: {e}", "red")
+
+    return results
 
 
+def main():
+    args = parse_arguments()
+    files = find_php_files(args.path, args.extension)
 
-spider(path)
-scanner(final_files)
+    all_rce_hits = []
+    for file in files:
+        hits = scan_file_for_rce(file)
+        all_rce_hits.extend(hits)
+
+    if all_rce_hits:
+        print(tabulate(
+            all_rce_hits,
+            headers=["File", "RCE Function", "Line Number"],
+            tablefmt="psql",
+            stralign="center"
+        ))
+    else:
+        cprint("[+] No RCE-prone function calls detected.", "yellow")
+
+
+if __name__ == "__main__":
+    main()
